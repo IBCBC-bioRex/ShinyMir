@@ -6,6 +6,8 @@ An interactive R Shiny application for exploring miRNA regulatory networks acros
 
 ## Overview
 
+This repository contains the data and scripts related to "ShinyMIR to investigate miRNA-target associations".
+
 ShinyMIR integrates curated miRNA–disease and miRNA–gene associations with metabolic network data and Reactome pathway annotations. It provides interactive tables, network visualisations, co-targeting analyses, robustness diagnostics, and an exportable HTML report — all from a single DuckDB database.
 
 ---
