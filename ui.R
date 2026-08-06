@@ -835,16 +835,9 @@ Shiny.addCustomMessageHandler("trigger_zip_download", function(msg) {
             br(),
             p(icon("info-circle"),
               tags$em("Per-miRNA essentiality on the metabolic network.",
-                      "For each miRNA: how many targeted reactions are fully controlled (ESS_FRAC >= threshold) vs partially.")),
+                      "Essential = reaction fully disrupted by the miRNA (GPR boolean evaluation).",
+                      "Partial = reaction targeted but not fully disrupted (alternative enzyme active).")),
             fluidRow(
-              column(3,
-                numericInput("mr_essentiality_threshold",
-                             "Classify as essential if ESS_FRAC >=:",
-                             value = 1.0, min = 0.0, max = 1.0, step = 0.05),
-                tags$small(style = "color:#888;",
-                  "Classifies reactions for this plot only.",
-                  "To filter data upstream use the ESS_FRAC slider in the search panel.")
-              ),
               column(3, br(),
                 actionButton("run_mr_essentiality", "Compute essentiality",
                              icon = icon("play"), class = "btn-primary")

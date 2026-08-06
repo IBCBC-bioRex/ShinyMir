@@ -63,12 +63,16 @@ mirna_target_graph_fun <- function(df, maximum_nodo_graph = 200,
     color_col <- if (reaction_color_by == "category" && "CATEGORY" %in% colnames(df) &&
                      any(!is.na(df$CATEGORY))) "CATEGORY" else "SUBSYSTEM"
 
+    # Use RXN_KEY (HUMAN_ID) as the unique node identifier when available.
+    has_rxn_key_graph <- "RXN_KEY" %in% colnames(df)
+    if (!has_rxn_key_graph) df$RXN_KEY <- df$HUMAN_ID %||% df$NAME
+
     optional_cols <- intersect(c("FORMULA", "GPR"), colnames(df))
     reaction_subsystem <- df %>%
-      dplyr::select(dplyr::all_of(c("NAME", "SUBSYSTEM", "CATEGORY", "HUMAN_ID", optional_cols))) %>%
-      dplyr::distinct(NAME, .keep_all = TRUE)
+      dplyr::select(dplyr::all_of(c("RXN_KEY", "NAME", "SUBSYSTEM", "CATEGORY", "HUMAN_ID", optional_cols))) %>%
+      dplyr::distinct(RXN_KEY, .keep_all = TRUE)
 
-    reactions  <- unique(df[[type_network]])
+    reactions  <- unique(df$RXN_KEY)
     groups_vec <- unique(reaction_subsystem[[color_col]])
     groups_vec <- sort(groups_vec[!is.na(groups_vec) & groups_vec != ""])
 
@@ -94,7 +98,7 @@ mirna_target_graph_fun <- function(df, maximum_nodo_graph = 200,
     }
 
     reaction_nodes <- reaction_subsystem %>%
-      dplyr::filter(NAME %in% reactions) %>%
+      dplyr::filter(RXN_KEY %in% reactions) %>%
       dplyr::mutate(
         subsystem_label = dplyr::if_else(
           !is.na(.data[[color_col]]) & .data[[color_col]] != "",
@@ -106,15 +110,15 @@ mirna_target_graph_fun <- function(df, maximum_nodo_graph = 200,
           "#AAAAAA"
         )
       )
-    
-    # Label mostrato sul nodo: HUMAN_ID (più corto); fallback a NAME se mancante
+
+    # Label: HUMAN_ID (compact identifier); tooltip shows full NAME
     reaction_label <- dplyr::coalesce(
       dplyr::na_if(as.character(reaction_nodes$HUMAN_ID), ""),
       reaction_nodes$NAME
     )
-    
+
     nodes <- data.frame(
-      id    = c(nodes_mirna, reaction_nodes$NAME),
+      id    = c(nodes_mirna, reaction_nodes$RXN_KEY),
       label = c(nodes_mirna, reaction_label),
       group = c(rep("miRNA", length(nodes_mirna)),
                 paste0("sub_", reaction_nodes$subsystem_label)),
@@ -250,8 +254,10 @@ mirna_target_graph_fun <- function(df, maximum_nodo_graph = 200,
     if (!"TOTAL_GENES"      %in% colnames(df)) df$TOTAL_GENES      <- NA_integer_
     if (!"ESS_FRAC"         %in% colnames(df)) df$ESS_FRAC         <- NA_real_
 
+    # Edge key: use RXN_KEY (HUMAN_ID) to match node ids.
+    edge_key_col <- if ("RXN_KEY" %in% colnames(df)) "RXN_KEY" else type_network
     edges_filtered <- df %>%
-      group_by(from = MIRNA_NAME, to = !!sym(type_network)) %>%
+      group_by(from = MIRNA_NAME, to = .data[[edge_key_col]]) %>%
       summarise(
         ess_frac         = suppressWarnings(max(ESS_FRAC,         na.rm = TRUE)),
         genes_controlled = suppressWarnings(max(GENES_CONTROLLED, na.rm = TRUE)),
@@ -290,27 +296,28 @@ mirna_target_graph_fun <- function(df, maximum_nodo_graph = 200,
   # ── Essenzialità: colora gli archi per coppia (miRNA, reazione) ──────
   if (type_network == "NAME" && color_essentiality &&
       ("IS_ESSENTIAL" %in% colnames(df) || "GPR" %in% colnames(df))) {
+    ess_key_col <- if ("RXN_KEY" %in% colnames(df)) "RXN_KEY" else "NAME"
     edge_essentiality <- if ("IS_ESSENTIAL" %in% colnames(df)) {
       # Use pre-computed IS_ESSENTIAL (Boolean GPR evaluation)
       df %>%
-        dplyr::select(MIRNA_NAME, NAME, IS_ESSENTIAL) %>%
+        dplyr::select(MIRNA_NAME, dplyr::all_of(ess_key_col), IS_ESSENTIAL) %>%
         dplyr::distinct() %>%
-        dplyr::group_by(MIRNA_NAME, NAME) %>%
+        dplyr::group_by(MIRNA_NAME, .data[[ess_key_col]]) %>%
         dplyr::summarise(
-          is_ess     = any(IS_ESSENTIAL == TRUE, na.rm = TRUE),
-          .groups    = "drop"
+          is_ess  = any(IS_ESSENTIAL == TRUE, na.rm = TRUE),
+          .groups = "drop"
         ) %>%
         dplyr::mutate(
           edge_color = dplyr::if_else(is_ess, "#B22222", "#6699CC"),
           edge_label = dplyr::if_else(is_ess, "Essential", "Non-essential")
         ) %>%
-        dplyr::select(MIRNA_NAME, NAME, edge_color, edge_label)
+        dplyr::select(dplyr::all_of(c("MIRNA_NAME", ess_key_col, "edge_color", "edge_label")))
     } else {
       # Fallback: GPR binary check (no 'or' = essential)
       df %>%
-        dplyr::select(MIRNA_NAME, NAME, GPR) %>%
+        dplyr::select(MIRNA_NAME, dplyr::all_of(ess_key_col), GPR) %>%
         dplyr::distinct() %>%
-        dplyr::group_by(MIRNA_NAME, NAME) %>%
+        dplyr::group_by(MIRNA_NAME, .data[[ess_key_col]]) %>%
         dplyr::summarise(
           is_ess  = any(!grepl("\\bor\\b", GPR, ignore.case = TRUE)),
           .groups = "drop"
@@ -319,11 +326,11 @@ mirna_target_graph_fun <- function(df, maximum_nodo_graph = 200,
           edge_color = dplyr::if_else(is_ess, "#B22222", "#6699CC"),
           edge_label = dplyr::if_else(is_ess, "Essential", "Non-essential")
         ) %>%
-        dplyr::select(MIRNA_NAME, NAME, edge_color, edge_label)
+        dplyr::select(dplyr::all_of(c("MIRNA_NAME", ess_key_col, "edge_color", "edge_label")))
     }
     edges_filtered <- edges_filtered %>%
       dplyr::left_join(edge_essentiality,
-                       by = c("from" = "MIRNA_NAME", "to" = "NAME")) %>%
+                       by = c("from" = "MIRNA_NAME", "to" = ess_key_col)) %>%
       dplyr::mutate(
         color = dplyr::coalesce(edge_color, "#A9A9A9"),
         title = paste0(title, "<br>Essentiality: ", dplyr::coalesce(edge_label, "Unknown"))
@@ -486,6 +493,15 @@ mirna_target_graph_fun <- function(df, maximum_nodo_graph = 200,
 # Returns TRUE  = reaction is disrupted (miRNA has essential control).
 # Returns FALSE = reaction can still proceed via untargeted genes.
 # Returns NA    = GPR missing / parse error.
+# Count unique gene tokens in a GPR string (same parser as evaluate_gpr_disruption).
+# Returns NA for missing/empty GPR.
+count_gpr_genes <- function(gpr) {
+  if (is.null(gpr) || is.na(gpr) || !nzchar(trimws(gpr))) return(NA_integer_)
+  tokens <- regmatches(gpr, gregexpr("[A-Za-z][A-Za-z0-9_.:-]*", gpr))[[1]]
+  gene_tokens <- unique(tokens[!tolower(tokens) %in% c("and", "or")])
+  length(gene_tokens)
+}
+
 evaluate_gpr_disruption <- function(gpr, targeted_genes) {
   if (is.null(gpr) || is.na(gpr) || !nzchar(trimws(gpr))) return(NA)
 
@@ -507,15 +523,19 @@ evaluate_gpr_disruption <- function(gpr, targeted_genes) {
   !isTRUE(result)   # disrupted = expression FALSE = IS_ESSENTIAL TRUE
 }
 
-# Adds IS_ESSENTIAL column to df (one value per (MIRNA_NAME, NAME) pair).
+# Adds IS_ESSENTIAL column to df (one value per (MIRNA_NAME, RXN_KEY) pair).
+# RXN_KEY = HUMAN_ID when present, else NAME (set by get_filtered_mr).
 # Requires flat rows with GENE_NAME, NAME, MIRNA_NAME, GPR columns.
 compute_is_essential <- function(df) {
   if (is.null(df) || nrow(df) == 0) return(df)
   needed <- c("MIRNA_NAME", "NAME", "GPR", "GENE_NAME")
   if (!all(needed %in% colnames(df))) return(df)
 
+  # Use RXN_KEY (HUMAN_ID) as the unique reaction identifier when available.
+  key_col <- if ("RXN_KEY" %in% colnames(df)) "RXN_KEY" else "NAME"
+
   pairs <- df %>%
-    dplyr::group_by(MIRNA_NAME, NAME) %>%
+    dplyr::group_by(MIRNA_NAME, .data[[key_col]]) %>%
     dplyr::summarise(
       gpr_val  = dplyr::first(GPR),
       targeted = list(unique(GENE_NAME)),
@@ -524,9 +544,9 @@ compute_is_essential <- function(df) {
     dplyr::rowwise() %>%
     dplyr::mutate(IS_ESSENTIAL = evaluate_gpr_disruption(gpr_val, targeted)) %>%
     dplyr::ungroup() %>%
-    dplyr::select(MIRNA_NAME, NAME, IS_ESSENTIAL)
+    dplyr::select(dplyr::all_of(c("MIRNA_NAME", key_col, "IS_ESSENTIAL")))
 
-  dplyr::left_join(df, pairs, by = c("MIRNA_NAME", "NAME"))
+  dplyr::left_join(df, pairs, by = c("MIRNA_NAME", key_col))
 }
 
 # =============================================================================
@@ -538,15 +558,18 @@ compute_is_essential <- function(df) {
 compute_essentiality_fraction <- function(con, df) {
   if (is.null(df) || nrow(df) == 0) return(df)
   
+  # Use RXN_KEY (HUMAN_ID) as the unique reaction identifier when available.
+  key_col <- if ("RXN_KEY" %in% colnames(df)) "RXN_KEY" else "NAME"
+
   # --- Numeratore ---------------------------------------------------------
   if (!"GENES_CONTROLLED" %in% colnames(df)) {
     if ("GENE_COUNT" %in% colnames(df)) {
       # df già aggregato per (miRNA, reazione), con GENE_COUNT pronto
       df$GENES_CONTROLLED <- as.integer(df$GENE_COUNT)
     } else if ("GENE_NAME" %in% colnames(df)) {
-      # Row-level o GROUP_CONCAT: conta geni distinti per coppia
+      # Row-level o GROUP_CONCAT: conta geni distinti per coppia (miRNA, RXN_KEY)
       df <- df %>%
-        dplyr::group_by(MIRNA_NAME, NAME) %>%
+        dplyr::group_by(MIRNA_NAME, .data[[key_col]]) %>%
         dplyr::mutate(GENES_CONTROLLED = length(split_unique(GENE_NAME))) %>%
         dplyr::ungroup()
     } else {
@@ -568,24 +591,34 @@ compute_essentiality_fraction <- function(con, df) {
   }
   
   # --- Denominatore -------------------------------------------------------
-  # Use pre-loaded reaction_total_genes_map (global.R) to avoid per-call DB query.
-  # Falls back to DB query only if a reaction name is not in the cache (e.g. after
-  # metabolism upload before cache refresh).
+  # Primary: parse gene count directly from GPR string (consistent with IS_ESSENTIAL,
+  # immune to REACTIONS_GENES duplicates caused by multiple REACTION_IDs sharing a NAME).
+  # Fallback: pre-loaded reaction_total_genes_map (global.R) when GPR is absent.
   if (!"TOTAL_GENES" %in% colnames(df)) {
-    rxns        <- unique(df$NAME)
-    cached_vals <- reaction_total_genes_map[rxns]
-    if (any(is.na(cached_vals))) {
-      # Some reactions not in cache – fall back to DB for missing ones
-      missing_rxns <- rxns[is.na(cached_vals)]
-      tg_missing   <- dbGetQuery(con, glue_sql(
-        "SELECT E.NAME AS NAME, COUNT(DISTINCT RG.GENE_ID) AS TOTAL_GENES
-           FROM {`REACTIONS_TBL`} E JOIN {`REACTIONS_GENES_TBL`} RG ON E.REACTION_ID = RG.REACTION_ID
-          WHERE E.NAME IN ({vals*}) GROUP BY E.REACTION_ID, E.NAME",
-        vals = missing_rxns, .con = con))
-      extra <- setNames(as.integer(tg_missing$TOTAL_GENES), tg_missing$NAME)
-      cached_vals[names(extra)] <- extra
+    if ("GPR" %in% colnames(df)) {
+      # One GPR per reaction key (HUMAN_ID when available, else NAME).
+      # Each RXN_KEY maps to exactly one GPR — no aggregation needed.
+      gpr_map <- df %>%
+        dplyr::group_by(.data[[key_col]]) %>%
+        dplyr::summarise(gpr_val = dplyr::first(stats::na.omit(GPR)), .groups = "drop")
+      gpr_map$TOTAL_GENES <- vapply(gpr_map$gpr_val, count_gpr_genes, integer(1))
+      df <- dplyr::left_join(df, gpr_map[, c(key_col, "TOTAL_GENES")], by = key_col)
+    } else {
+      # GPR not in df – fall back to cached DB counts
+      rxns        <- unique(df$NAME)
+      cached_vals <- reaction_total_genes_map[rxns]
+      if (any(is.na(cached_vals))) {
+        missing_rxns <- rxns[is.na(cached_vals)]
+        tg_missing   <- dbGetQuery(con, glue_sql(
+          "SELECT E.NAME AS NAME, COUNT(DISTINCT RG.GENE_ID) AS TOTAL_GENES
+             FROM {`REACTIONS_TBL`} E JOIN {`REACTIONS_GENES_TBL`} RG ON E.REACTION_ID = RG.REACTION_ID
+            WHERE E.NAME IN ({vals*}) GROUP BY E.NAME",
+          vals = missing_rxns, .con = con))
+        extra <- setNames(as.integer(tg_missing$TOTAL_GENES), tg_missing$NAME)
+        cached_vals[names(extra)] <- extra
+      }
+      df$TOTAL_GENES <- as.integer(cached_vals[df$NAME])
     }
-    df$TOTAL_GENES <- as.integer(cached_vals[df$NAME])
   }
   
   # --- Frazione -----------------------------------------------------------

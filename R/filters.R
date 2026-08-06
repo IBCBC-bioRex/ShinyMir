@@ -94,22 +94,56 @@ apply_mr_postprocessing <- function(df, con, input, for_plot) {
     (is_flat && (min_ess_frac > 0 || only_essential))
 
   if (needs_gpr && nrow(df) > 0) {
+    # The base SQL query (query_mr) already returns GPR, HUMAN_ID, SUBSYSTEM, FORMULA
+    # per REACTION_ID. After dedup by RXN_KEY (=HUMAN_ID) in get_filtered_mr, each
+    # row carries its own correct GPR — no re-fetch needed.
+    # Only fetch columns that are genuinely absent (e.g. when called from a code path
+    # that uses a different base query or an older df without these columns).
     cols_wanted <- c("SUBSYSTEM", "GPR", "HUMAN_ID", "FORMULA")
-    cols_needed <- cols_wanted[!cols_wanted %in% colnames(df)]
-    if (length(cols_needed) > 0) {
-      lookup_cols <- paste(
-        c("NAME AS NAME",
-          sapply(cols_needed, function(col) paste0("MIN(", col, ") AS ", col))),
-        collapse = ", "
-      )
-      reaction_lookup <- dbGetQuery(con,
-        glue_sql(paste0("SELECT ", lookup_cols, " FROM ", REACTIONS_TBL, " WHERE NAME IN ({vals*}) GROUP BY NAME"),
-                 vals = unique(df$NAME), .con = con)
-      )
-      df <- dplyr::left_join(df, reaction_lookup, by = "NAME")
+    cols_fetch  <- cols_wanted[!cols_wanted %in% colnames(df)]
+    if (length(cols_fetch) > 0) {
+      # Use RXN_KEY (HUMAN_ID) as the join key when available — it is unique per
+      # reaction variant so no MIN() aggregation is needed.
+      # Fall back to NAME-based MIN() for rows without a HUMAN_ID.
+      has_rxn_key <- "RXN_KEY" %in% colnames(df)
+      if (has_rxn_key && !all(is.na(df$RXN_KEY) | df$RXN_KEY == "")) {
+        lookup_cols <- paste(
+          c("COALESCE(HUMAN_ID, NAME) AS RXN_KEY",
+            cols_fetch),
+          collapse = ", "
+        )
+        reaction_lookup <- dbGetQuery(con,
+          glue_sql(paste0("SELECT ", lookup_cols, " FROM ", REACTIONS_TBL,
+                          " WHERE COALESCE(HUMAN_ID, NAME) IN ({vals*})"),
+                   vals = unique(df$RXN_KEY), .con = con)
+        )
+        cols_to_drop <- setdiff(intersect(colnames(df), colnames(reaction_lookup)), "RXN_KEY")
+        if (length(cols_to_drop) > 0)
+          df <- df[, setdiff(colnames(df), cols_to_drop), drop = FALSE]
+        df <- dplyr::left_join(df, reaction_lookup, by = "RXN_KEY")
+      } else {
+        lookup_cols <- paste(
+          c("NAME AS NAME",
+            sapply(cols_fetch, function(col) paste0("MIN(", col, ") AS ", col))),
+          collapse = ", "
+        )
+        reaction_lookup <- dbGetQuery(con,
+          glue_sql(paste0("SELECT ", lookup_cols, " FROM ", REACTIONS_TBL,
+                          " WHERE NAME IN ({vals*}) GROUP BY NAME"),
+                   vals = unique(df$NAME), .con = con)
+        )
+        cols_to_drop <- setdiff(intersect(colnames(df), colnames(reaction_lookup)), "NAME")
+        if (length(cols_to_drop) > 0)
+          df <- df[, setdiff(colnames(df), cols_to_drop), drop = FALSE]
+        df <- dplyr::left_join(df, reaction_lookup, by = "NAME")
+      }
     }
 
-    # ESS_FRAC: always compute when GPR is present and data is flat
+    # RXN_KEY may not exist if df came from a non-MR code path; derive it now.
+    if (!"RXN_KEY" %in% colnames(df) && "HUMAN_ID" %in% colnames(df))
+      df$RXN_KEY <- ifelse(is.na(df$HUMAN_ID) | df$HUMAN_ID == "", df$NAME, df$HUMAN_ID)
+
+    # ESS_FRAC: compute when GPR is present and data is flat
     if (is_flat && all(c("MIRNA_NAME", "NAME") %in% colnames(df)) &&
         !"ESS_FRAC" %in% colnames(df)) {
       df <- compute_essentiality_fraction(con, df)
@@ -1109,11 +1143,17 @@ get_filtered_mr <- function(con, input, for_plot, my_data, group_override = NULL
                                   human_clause        = human_clause,
                                   .con = con))
 
-  # Deduplicate: same (miRNA, gene, reaction) can appear multiple times when the DB
-  # has multiple REACTION_IDs sharing the same NAME (e.g. different compartments).
-  # Keep the first occurrence so downstream counts and essentiality are stable.
-  if (nrow(df) > 0 && all(c("MIRNA_NAME", "GENE_NAME", "NAME") %in% colnames(df)))
-    df <- dplyr::distinct(df, MIRNA_NAME, GENE_NAME, NAME, .keep_all = TRUE)
+  # RXN_KEY = HUMAN_ID (the true unique reaction identifier in Human-GEM).
+  # Falls back to NAME for reactions without a HUMAN_ID (e.g. user-uploaded models).
+  # Using RXN_KEY instead of NAME as the internal key means each reaction variant
+  # (same name but different GPR/compartment) is treated independently.
+  if (nrow(df) > 0 && "HUMAN_ID" %in% colnames(df))
+    df$RXN_KEY <- ifelse(is.na(df$HUMAN_ID) | df$HUMAN_ID == "", df$NAME, df$HUMAN_ID)
+
+  # Deduplicate per (miRNA, gene, RXN_KEY): each HUMAN_ID is already unique in the DB
+  # so duplicates here can only arise from multiple join paths.
+  if (nrow(df) > 0 && all(c("MIRNA_NAME", "GENE_NAME", "RXN_KEY") %in% colnames(df)))
+    df <- dplyr::distinct(df, MIRNA_NAME, GENE_NAME, RXN_KEY, .keep_all = TRUE)
 
   if ("GENE_NAME" %in% colnames(df)) {
     if (!for_plot && nrow(df) > 0) df <- add_expression_annotation(df, input, "_mr", con)
