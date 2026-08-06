@@ -1109,6 +1109,12 @@ get_filtered_mr <- function(con, input, for_plot, my_data, group_override = NULL
                                   human_clause        = human_clause,
                                   .con = con))
 
+  # Deduplicate: same (miRNA, gene, reaction) can appear multiple times when the DB
+  # has multiple REACTION_IDs sharing the same NAME (e.g. different compartments).
+  # Keep the first occurrence so downstream counts and essentiality are stable.
+  if (nrow(df) > 0 && all(c("MIRNA_NAME", "GENE_NAME", "NAME") %in% colnames(df)))
+    df <- dplyr::distinct(df, MIRNA_NAME, GENE_NAME, NAME, .keep_all = TRUE)
+
   if ("GENE_NAME" %in% colnames(df)) {
     if (!for_plot && nrow(df) > 0) df <- add_expression_annotation(df, input, "_mr", con)
   }

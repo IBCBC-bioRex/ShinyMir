@@ -746,7 +746,7 @@ build_shinymir_report <- function(mda_df, mga_df, mr_df, ovr_df,
                                    mda_flat_df = NULL,
                                    mga_flat_df = NULL,
                                    mr_flat_df  = NULL) {
-  ts    <- format(Sys.time(), "%Y-%m-%d %H:%M")
+  ts    <- ""
   n_sec <- sum(!is.null(mda_df), !is.null(mga_df),
                !is.null(mr_df),  !is.null(ovr_df))
 
@@ -781,10 +781,9 @@ build_shinymir_report <- function(mda_df, mga_df, mr_df, ovr_df,
   <div><h1>ShinyMIR - Analysis Report</h1>
     <div class="sub">Multi-omics miRNA association analysis</div></div>
   <div class="meta">
-    <div><strong>Generated:</strong> %s</div>
     <div><strong>Sections with data:</strong> %d / 4</div>
   </div>
-</div>', ts, n_sec),
+</div>', n_sec),
 
     if (nzchar(db_block)) paste0('<div style="padding:12px 40px 0;">', db_block, '</div>') else "",
 

@@ -530,19 +530,19 @@ mr_essentiality_df <- reactive({
     "Run a miRNA-Reaction search first (Table tab)."
   ))
   df <- filtered_mr_base()
-  if (!"ESS_FRAC" %in% names(df)) df <- compute_essentiality_fraction(con, df)
-
-  threshold <- as.numeric(input$mr_essentiality_threshold %||% 1.0)
+  if (!"ESS_FRAC"     %in% names(df)) df <- compute_essentiality_fraction(con, df)
+  if (!"IS_ESSENTIAL" %in% names(df)) df <- compute_is_essential(df)
 
   # One row per (miRNA, reaction) to avoid counting gene-level duplicates
   pairs <- dplyr::distinct(df, MIRNA_NAME, REACTION_NAME, .keep_all = TRUE)
   pairs$mirna_ <- pairs$MIRNA_NAME
 
+  # IS_ESSENTIAL is the GPR-boolean column (same source as table); guaranteed present above
   pairs %>%
     dplyr::group_by(MIRNA_NAME = mirna_) %>%
     dplyr::summarise(
       N_reactions   = dplyr::n_distinct(REACTION_NAME),
-      N_essential   = sum(!is.na(ESS_FRAC) & ESS_FRAC >= threshold),
+      N_essential   = sum(IS_ESSENTIAL == TRUE, na.rm = TRUE),
       N_partial     = N_reactions - N_essential,
       Mean_ESS_FRAC = round(mean(ESS_FRAC, na.rm = TRUE), 3),
       .groups = "drop"
