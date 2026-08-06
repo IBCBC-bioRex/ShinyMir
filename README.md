@@ -1,3 +1,5 @@
+This repository contains the data and scripts related to "ShinyMIR to investigate miRNA-target associations".
+
 # ShinyMIR
 
 An interactive R Shiny application for exploring miRNA regulatory networks across disease, gene, metabolic reaction, and pathway dimensions.
@@ -5,8 +7,6 @@ An interactive R Shiny application for exploring miRNA regulatory networks acros
 ---
 
 ## Overview
-
-This repository contains the data and scripts related to "ShinyMIR to investigate miRNA-target associations".
 
 ShinyMIR integrates curated miRNA–disease and miRNA–gene associations with metabolic network data and Reactome pathway annotations. It provides interactive tables, network visualisations, co-targeting analyses, robustness diagnostics, and an exportable HTML report — all from a single DuckDB database.
 
@@ -114,11 +114,4 @@ ShinyMir/
 │   ├── db.R                    # DB utilities, index creation, upload handlers
 │   ├── ui_helpers.R            # Shared UI components
 │   └── utils.R                 # Shared helpers, upload_list_server module
-├── creation_database/
-│   ├── creation_database.R     # Full SQLite DB creation script
-│   ├── sqlite_to_duckdb.R      # SQLite → DuckDB migration with size/perf options
-│   ├── check_db_size.R         # DB diagnostics: row counts, nTPM simulation
-│   └── make_mini_db.R          # Mini DB for deploy testing
-├── install_packages.R          # Manual package installer (Option B)
-└── renv.lock                   # Package version lockfile (Option A)
 ```
